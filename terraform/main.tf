@@ -27,6 +27,7 @@ resource "aws_lightsail_instance" "app_server" {
 
   user_data = templatefile("${path.module}/user_data.sh", {
     app_name = var.app_name
+    app_port = var.app_port
   })
 
   tags = {
@@ -110,7 +111,7 @@ resource "aws_lightsail_database" "app_database" {
   availability_zone        = data.aws_availability_zones.available.names[0]
   master_database_name     = var.db_name
   master_username          = var.db_username
-  master_user_password     = var.db_password
+  master_password          = var.db_password
   blueprint_id             = "mysql_8_0"
   bundle_id                = "micro_1_0"
 

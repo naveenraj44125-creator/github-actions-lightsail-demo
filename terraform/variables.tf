@@ -13,12 +13,12 @@ variable "instance_name" {
 variable "blueprint_id" {
   description = "Lightsail blueprint ID (OS image)"
   type        = string
-  default     = "ubuntu_20_04"
+  default     = "ubuntu_22_04"
   
   validation {
     condition = contains([
-      "ubuntu_20_04",
       "ubuntu_22_04",
+      "ubuntu_24_04",
       "amazon_linux_2",
       "centos_7_2009_01",
       "debian_11"
@@ -61,6 +61,12 @@ variable "app_name" {
   description = "Application name"
   type        = string
   default     = "lightsail-demo-app"
+}
+
+variable "app_port" {
+  description = "Application port"
+  type        = number
+  default     = 3000
 }
 
 variable "create_container_service" {

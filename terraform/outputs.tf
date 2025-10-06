@@ -115,12 +115,12 @@ output "deployment_instructions" {
        - Instance IP: ${aws_lightsail_static_ip.app_static_ip.ip_address}
     
     3. SSH into the instance to set up the application directory:
-       ${self.ssh_connection_command}
+       ssh -i ${aws_lightsail_key_pair.app_key.name}.pem ubuntu@${aws_lightsail_static_ip.app_static_ip.ip_address}
     
     4. Application will be available at:
-       ${self.application_url}
+       http://${aws_lightsail_static_ip.app_static_ip.ip_address}:3000
     
     5. Health check endpoint:
-       ${self.health_check_url}
+       http://${aws_lightsail_static_ip.app_static_ip.ip_address}:3000/health
   EOT
 }

@@ -16,7 +16,7 @@ app.use(express.static('public'));
 // Routes
 app.get('/', (req, res) => {
   res.json({
-    message: 'Welcome to Lightsail Demo App!',
+    message: 'Welcome to Lightsail Demo App! 🚀 Deployed via GitHub Actions!',
     version: '1.0.0',
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV || 'development'
