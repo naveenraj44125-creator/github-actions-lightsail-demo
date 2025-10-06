@@ -9,10 +9,40 @@ on:
 env:
   AWS_REGION: us-east-1
   LIGHTSAIL_INSTANCE_NAME: my-app-instance
+  NODE_VERSION: '18'
 
 jobs:
-  deploy:
+  test:
     runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+        cache-dependency-path: app/package-lock.json
+
+    - name: Install dependencies
+      working-directory: ./app
+      run: npm ci
+
+    - name: Run tests
+      working-directory: ./app
+      run: npm test
+
+    - name: Build application
+      working-directory: ./app
+      run: npm run build
+
+  deploy-infrastructure:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    outputs:
+      instance_ip: ${{ steps.get-ip.outputs.instance_ip }}
     
     steps:
     - name: Checkout code
@@ -26,26 +56,22 @@ jobs:
         aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
         aws-region: ${{ env.AWS_REGION }}
 
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
       with:
-        node-version: '18'
-        cache: 'npm'
+        terraform_version: 1.5.0
 
-    - name: Install dependencies
-      run: |
-        cd app
-        npm ci
+    - name: Terraform Init
+      working-directory: ./terraform
+      run: terraform init
 
-    - name: Run tests
-      run: |
-        cd app
-        npm test
+    - name: Terraform Plan
+      working-directory: ./terraform
+      run: terraform plan -out=tfplan
 
-    - name: Build application
-      run: |
-        cd app
-        npm run build
+    - name: Terraform Apply
+      working-directory: ./terraform
+      run: terraform apply -auto-approve tfplan
 
     - name: Get Lightsail instance IP
       id: get-ip
@@ -54,57 +80,25 @@ jobs:
         echo "instance_ip=$INSTANCE_IP" >> $GITHUB_OUTPUT
         echo "Instance IP: $INSTANCE_IP"
 
-    - name: Setup SSH key
+    - name: Wait for instance to be ready
       run: |
-        mkdir -p ~/.ssh
-        echo "${{ secrets.LIGHTSAIL_SSH_KEY }}" > ~/.ssh/lightsail_key
-        chmod 600 ~/.ssh/lightsail_key
-        ssh-keyscan -H ${{ steps.get-ip.outputs.instance_ip }} >> ~/.ssh/known_hosts
-
-    - name: Deploy to Lightsail instance
-      run: |
-        # Copy application files to the instance
-        scp -i ~/.ssh/lightsail_key -r app/ ubuntu@${{ steps.get-ip.outputs.instance_ip }}:/tmp/
+        echo "Waiting for instance to be ready..."
+        sleep 120
         
-        # SSH into instance and deploy
-        ssh -i ~/.ssh/lightsail_key ubuntu@${{ steps.get-ip.outputs.instance_ip }} << 'EOF'
-          # Stop the application
-          sudo systemctl stop myapp || true
-          
-          # Backup current version
-          sudo cp -r /var/www/myapp /var/www/myapp.backup.$(date +%Y%m%d_%H%M%S) || true
-          
-          # Deploy new version
-          sudo rm -rf /var/www/myapp
-          sudo mv /tmp/app /var/www/myapp
-          sudo chown -R www-data:www-data /var/www/myapp
-          
-          # Install/update dependencies
-          cd /var/www/myapp
-          sudo npm ci --production
-          
-          # Start the application
-          sudo systemctl start myapp
-          sudo systemctl enable myapp
-          
-          # Check if service is running
-          sleep 5
-          sudo systemctl status myapp
-        EOF
+        # Wait for SSH to be available
+        for i in {1..30}; do
+          if nc -z ${{ steps.get-ip.outputs.instance_ip }} 22; then
+            echo "SSH is ready!"
+            break
+          fi
+          echo "Waiting for SSH... ($i/30)"
+          sleep 10
+        done
 
-    - name: Health check
-      run: |
-        # Wait for application to start
-        sleep 10
-        
-        # Check if application is responding
-        curl -f http://${{ steps.get-ip.outputs.instance_ip }}:3000/health || exit 1
-        echo "Application deployed successfully!"
-
-  # Alternative job for container deployment
-  deploy-container:
+  deploy-application:
+    needs: [test, deploy-infrastructure]
     runs-on: ubuntu-latest
-    if: false  # Set to true to enable container deployment instead
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     
     steps:
     - name: Checkout code
@@ -115,56 +109,138 @@ jobs:
       with:
         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
         aws-region: ${{ env.AWS_REGION }}
 
-    - name: Build and push Docker image
+    - name: Setup SSH key
       run: |
-        cd app
-        
-        # Build Docker image
-        docker build -t my-app:latest .
-        
-        # Tag for Lightsail Container Service
-        docker tag my-app:latest my-app:$(date +%Y%m%d_%H%M%S)
-        
-        # Push to Lightsail Container Service
-        aws lightsail push-container-image \
-          --service-name my-container-service \
-          --label my-app \
-          --image my-app:latest
+        mkdir -p ~/.ssh
+        echo "${{ secrets.LIGHTSAIL_SSH_KEY }}" > ~/.ssh/lightsail_key
+        chmod 600 ~/.ssh/lightsail_key
+        ssh-keyscan -H ${{ needs.deploy-infrastructure.outputs.instance_ip }} >> ~/.ssh/known_hosts
 
-    - name: Deploy to Lightsail Container Service
+    - name: Deploy application to Lightsail
+      env:
+        INSTANCE_IP: ${{ needs.deploy-infrastructure.outputs.instance_ip }}
+        GITHUB_SHA: ${{ github.sha }}
+        GITHUB_REF_NAME: ${{ github.ref_name }}
+        GITHUB_WORKFLOW: ${{ github.workflow }}
+        GITHUB_RUN_ID: ${{ github.run_id }}
+        GITHUB_ACTOR: ${{ github.actor }}
       run: |
-        # Create deployment configuration
-        cat > deployment.json << EOF
-        {
-          "containers": {
-            "my-app": {
-              "image": ":my-container-service.my-app.latest",
-              "ports": {
-                "3000": "HTTP"
-              },
-              "environment": {
-                "NODE_ENV": "production"
-              }
-            }
-          },
-          "publicEndpoint": {
-            "containerName": "my-app",
-            "containerPort": 3000,
-            "healthCheck": {
-              "healthyThreshold": 2,
-              "unhealthyThreshold": 2,
-              "timeoutSeconds": 5,
-              "intervalSeconds": 30,
-              "path": "/health",
-              "successCodes": "200-499"
-            }
-          }
-        }
-        EOF
+        # Create deployment package
+        tar -czf app.tar.gz app/
         
-        # Deploy the container
-        aws lightsail create-container-service-deployment \
-          --service-name my-container-service \
-          --cli-input-json file://deployment.json
+        # Copy application to instance
+        scp -i ~/.ssh/lightsail_key -o StrictHostKeyChecking=no app.tar.gz ubuntu@$INSTANCE_IP:/tmp/
+        
+        # Deploy on the instance
+        ssh -i ~/.ssh/lightsail_key -o StrictHostKeyChecking=no ubuntu@$INSTANCE_IP << 'EOF'
+          set -e
+          
+          # Extract application
+          cd /tmp
+          tar -xzf app.tar.gz
+          
+          # Stop the application service
+          sudo systemctl stop lightsail-demo-app || true
+          
+          # Backup current version if it exists
+          if [ -d "/var/www/lightsail-demo-app" ]; then
+            sudo cp -r /var/www/lightsail-demo-app /var/www/lightsail-demo-app.backup.$(date +%Y%m%d_%H%M%S)
+          fi
+          
+          # Deploy new version
+          sudo rm -rf /var/www/lightsail-demo-app
+          sudo mv /tmp/app /var/www/lightsail-demo-app
+          sudo chown -R www-data:www-data /var/www/lightsail-demo-app
+          
+          # Install dependencies
+          cd /var/www/lightsail-demo-app
+          sudo -u www-data npm ci --production
+          
+          # Set environment variables for deployment info
+          sudo tee /var/www/lightsail-demo-app/.env > /dev/null << ENVEOF
+          NODE_ENV=production
+          PORT=3000
+          DEPLOY_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          GITHUB_SHA=$GITHUB_SHA
+          GITHUB_REF_NAME=$GITHUB_REF_NAME
+          GITHUB_WORKFLOW=$GITHUB_WORKFLOW
+          GITHUB_RUN_ID=$GITHUB_RUN_ID
+          GITHUB_ACTOR=$GITHUB_ACTOR
+        ENVEOF
+          
+          # Update systemd service to use .env file
+          sudo tee /etc/systemd/system/lightsail-demo-app.service > /dev/null << SERVICEEOF
+        [Unit]
+        Description=Lightsail Demo App Node.js Application
+        After=network.target
+
+        [Service]
+        Type=simple
+        User=www-data
+        Group=www-data
+        WorkingDirectory=/var/www/lightsail-demo-app
+        ExecStart=/usr/bin/node server.js
+        Restart=always
+        RestartSec=10
+        EnvironmentFile=/var/www/lightsail-demo-app/.env
+
+        # Logging
+        StandardOutput=syslog
+        StandardError=syslog
+        SyslogIdentifier=lightsail-demo-app
+
+        [Install]
+        WantedBy=multi-user.target
+        SERVICEEOF
+          
+          # Reload systemd and start the application
+          sudo systemctl daemon-reload
+          sudo systemctl enable lightsail-demo-app
+          sudo systemctl start lightsail-demo-app
+          
+          # Restart nginx to ensure proper proxy configuration
+          sudo systemctl restart nginx
+          
+          # Wait a moment for the service to start
+          sleep 5
+          
+          # Check service status
+          sudo systemctl status lightsail-demo-app --no-pager
+          
+          echo "Application deployed successfully!"
+        EOF
+
+    - name: Health check
+      env:
+        INSTANCE_IP: ${{ needs.deploy-infrastructure.outputs.instance_ip }}
+      run: |
+        echo "Performing health check..."
+        
+        # Wait for application to fully start
+        sleep 15
+        
+        # Check health endpoint
+        for i in {1..10}; do
+          if curl -f -s http://$INSTANCE_IP/health; then
+            echo "✅ Health check passed!"
+            break
+          elif [ $i -eq 10 ]; then
+            echo "❌ Health check failed after 10 attempts"
+            exit 1
+          else
+            echo "Health check attempt $i/10 failed, retrying in 10 seconds..."
+            sleep 10
+          fi
+        done
+        
+        # Test main endpoint
+        echo "Testing main application endpoint..."
+        curl -f http://$INSTANCE_IP/ || exit 1
+        
+        echo "🚀 Application deployed successfully!"
+        echo "Application URL: http://$INSTANCE_IP"
+        echo "Health check: http://$INSTANCE_IP/health"
+        echo "API info: http://$INSTANCE_IP/api/info"

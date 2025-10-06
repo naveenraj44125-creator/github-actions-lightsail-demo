@@ -15,7 +15,7 @@ describe('Lightsail Demo App', () => {
       
       expect(response.status).toBe(200);
       expect(response.body).toHaveProperty('message');
-      expect(response.body.message).toBe('Welcome to Lightsail Demo App!');
+      expect(response.body.message).toBe('Welcome to Lightsail Demo App! 🚀 Deployed via GitHub Actions!');
       expect(response.body).toHaveProperty('version');
       expect(response.body).toHaveProperty('timestamp');
     });
