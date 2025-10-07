@@ -1,4 +1,4 @@
-#!/bin/bash
+##!/bin/bash
 
 # User data script to set up the Lightsail instance for Node.js application deployment
 # This script runs when the instance first boots up
