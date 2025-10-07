@@ -43,6 +43,7 @@ jobs:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     outputs:
       instance_ip: ${{ steps.get-ip.outputs.instance_ip }}
+      ssh_private_key: ${{ steps.get-ssh-key.outputs.ssh_private_key }}
     
     steps:
     - name: Checkout code
@@ -79,6 +80,15 @@ jobs:
         echo "instance_ip=$INSTANCE_IP" >> $GITHUB_OUTPUT
         echo "Instance IP: $INSTANCE_IP"
 
+    - name: Get SSH private key
+      id: get-ssh-key
+      working-directory: ./terraform
+      run: |
+        SSH_KEY=$(terraform output -raw ssh_private_key)
+        echo "ssh_private_key<<EOF" >> $GITHUB_OUTPUT
+        echo "$SSH_KEY" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+
     - name: Wait for instance to be ready
       run: |
         echo "Waiting for instance to be ready..."
@@ -113,7 +123,7 @@ jobs:
     - name: Setup SSH key
       run: |
         mkdir -p ~/.ssh
-        echo "${{ secrets.LIGHTSAIL_SSH_KEY }}" > ~/.ssh/lightsail_key
+        echo "${{ needs.deploy-infrastructure.outputs.ssh_private_key }}" > ~/.ssh/lightsail_key
         chmod 600 ~/.ssh/lightsail_key
         ssh-keyscan -H ${{ needs.deploy-infrastructure.outputs.instance_ip }} >> ~/.ssh/known_hosts
 
