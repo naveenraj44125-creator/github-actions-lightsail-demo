@@ -112,6 +112,12 @@ jobs:
         echo "Waiting for instance to be ready..."
         sleep 120
         
+        # Setup SSH key for this step
+        mkdir -p ~/.ssh
+        echo "${{ steps.get-ssh-key.outputs.ssh_private_key }}" > ~/.ssh/lightsail_key
+        chmod 600 ~/.ssh/lightsail_key
+        ssh-keyscan -H ${{ steps.get-ip.outputs.instance_ip }} >> ~/.ssh/known_hosts
+        
         # Wait for SSH to be available
         for i in {1..30}; do
           if nc -z ${{ steps.get-ip.outputs.instance_ip }} 22; then
@@ -120,6 +126,21 @@ jobs:
           fi
           echo "Waiting for SSH... ($i/30)"
           sleep 10
+        done
+        
+        # Wait for user_data script to complete
+        echo "Waiting for user_data script to complete..."
+        for i in {1..20}; do
+          if ssh -i ~/.ssh/lightsail_key -o StrictHostKeyChecking=no ubuntu@${{ steps.get-ip.outputs.instance_ip }} "test -f /var/log/user-data.log && grep -q 'Setup completed!' /var/log/user-data.log"; then
+            echo "User data script completed!"
+            break
+          elif [ $i -eq 20 ]; then
+            echo "Warning: User data script may not have completed"
+            ssh -i ~/.ssh/lightsail_key -o StrictHostKeyChecking=no ubuntu@${{ steps.get-ip.outputs.instance_ip }} "tail -20 /var/log/user-data.log" || echo "Could not read user-data log"
+          else
+            echo "Waiting for user data script... ($i/20)"
+            sleep 15
+          fi
         done
 
   deploy-application:
@@ -171,12 +192,25 @@ jobs:
           # Stop the application service
           sudo systemctl stop lightsail-demo-app || true
           
+          # Ensure directory structure exists
+          echo "Creating /var/www directory..."
+          sudo mkdir -p /var/www
+          sudo chown root:root /var/www
+          sudo chmod 755 /var/www
+          ls -la /var/
+          
+          # Verify the app directory exists in /tmp
+          echo "Checking extracted files..."
+          ls -la /tmp/
+          
           # Backup current version if it exists
           if [ -d "/var/www/lightsail-demo-app" ]; then
+            echo "Backing up existing application..."
             sudo cp -r /var/www/lightsail-demo-app /var/www/lightsail-demo-app.backup.$(date +%Y%m%d_%H%M%S)
           fi
           
           # Deploy new version
+          echo "Deploying new version..."
           sudo rm -rf /var/www/lightsail-demo-app
           sudo mv /tmp/app /var/www/lightsail-demo-app
           sudo chown -R www-data:www-data /var/www/lightsail-demo-app
