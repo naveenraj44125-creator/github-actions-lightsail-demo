@@ -132,7 +132,7 @@ jobs:
         # Wait for user_data script to complete
         echo "Waiting for user_data script to complete..."
         for i in {1..20}; do
-          if ssh -i ~/.ssh/lightsail_key -o StrictHostKeyChecking=no ubuntu@${{ steps.get-ip.outputs.instance_ip }} "test -f /var/log/user-data.log && grep -q 'Setup completed!' /var/log/user-data.log"; then
+          if ssh -i ~/.ssh/lightsail_key -o StrictHostKeyChecking=no ubuntu@${{ steps.get-ip.outputs.instance_ip }} "test -f /var/log/user-data-complete.marker"; then
             echo "User data script completed!"
             break
           elif [ $i -eq 20 ]; then

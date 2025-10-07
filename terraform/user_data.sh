@@ -255,3 +255,6 @@ ss -tlnp | grep :3000
 ss -tlnp | grep :80
 
 echo "Setup completed! Instance is ready for deployment."
+
+# Create completion marker for GitHub Actions to check
+echo "Setup completed!" > /var/log/user-data-complete.marker
