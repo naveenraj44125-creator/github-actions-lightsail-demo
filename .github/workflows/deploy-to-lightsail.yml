@@ -221,8 +221,18 @@ jobs:
           
           # Ensure npm is available and use full path
           echo "Checking npm installation..."
-          which npm
-          npm --version
+          echo "PATH: $PATH"
+          echo "Checking if Node.js is installed..."
+          which node || echo "Node.js not found"
+          node --version || echo "Node.js version check failed"
+          echo "Checking if npm is installed..."
+          which npm || echo "npm not found in PATH"
+          npm --version || echo "npm version check failed"
+          echo "Checking /usr/bin for node and npm..."
+          ls -la /usr/bin/node* || echo "No node binaries in /usr/bin"
+          ls -la /usr/bin/npm* || echo "No npm binaries in /usr/bin"
+          echo "Checking if npm is available with full path..."
+          /usr/bin/npm --version || echo "/usr/bin/npm not available"
           
           # Use full path to npm or ensure PATH is set correctly
           sudo -u www-data env PATH=$PATH:/usr/bin:/usr/local/bin npm ci --production
