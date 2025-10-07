@@ -65,6 +65,24 @@ jobs:
       working-directory: ./terraform
       run: terraform init
 
+    - name: Clean up existing resources
+      working-directory: ./terraform
+      run: |
+        # Check if resources exist and clean them up
+        echo "Checking for existing resources..."
+        
+        # Delete existing key pair if it exists
+        aws lightsail delete-key-pair --key-pair-name "${{ env.LIGHTSAIL_INSTANCE_NAME }}-key" || echo "Key pair doesn't exist or already deleted"
+        
+        # Delete existing static IP if it exists
+        aws lightsail release-static-ip --static-ip-name "${{ env.LIGHTSAIL_INSTANCE_NAME }}-static-ip" || echo "Static IP doesn't exist or already deleted"
+        
+        # Delete existing instance if it exists
+        aws lightsail delete-instance --instance-name "${{ env.LIGHTSAIL_INSTANCE_NAME }}" || echo "Instance doesn't exist or already deleted"
+        
+        # Wait a moment for resources to be fully deleted
+        sleep 30
+
     - name: Terraform Plan
       working-directory: ./terraform
       run: terraform plan -out=tfplan
