@@ -18,3 +18,4 @@ This project demonstrates automated deployment to AWS Lightsail using GitHub Act
 ✅ Infrastructure: Deployed  
 ✅ GitHub Secrets: Updated  
 🔄 Testing automated deployment...
+# Test deployment fix
