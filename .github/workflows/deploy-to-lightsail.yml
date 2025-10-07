@@ -217,7 +217,14 @@ jobs:
           
           # Install dependencies
           cd /var/www/lightsail-demo-app
-          sudo -u www-data npm ci --production
+          
+          # Ensure npm is available and use full path
+          echo "Checking npm installation..."
+          which npm
+          npm --version
+          
+          # Use full path to npm or ensure PATH is set correctly
+          sudo -u www-data env PATH=$PATH:/usr/bin:/usr/local/bin npm ci --production
           
           # Set environment variables for deployment info
           sudo tee /var/www/lightsail-demo-app/.env > /dev/null << ENVEOF
