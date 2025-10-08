@@ -35,6 +35,16 @@ resource "aws_lightsail_instance" "app_server" {
     Environment = var.environment
     Project     = "GitHub-Actions-Lightsail-Demo"
     ManagedBy   = "Terraform"
+    # Force recreation when user_data changes
+    UserDataHash = filesha256("${path.module}/user_data.sh")
+  }
+
+  # Force replacement when user_data script changes
+  lifecycle {
+    replace_triggered_by = [
+      # This will force recreation when the user_data file content changes
+      filesha256("${path.module}/user_data.sh")
+    ]
   }
 }
 
