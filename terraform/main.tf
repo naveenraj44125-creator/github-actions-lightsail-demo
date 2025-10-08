@@ -5,6 +5,10 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.1"
+    }
   }
 }
 
@@ -15,6 +19,14 @@ provider "aws" {
 # Data source for available Lightsail availability zones
 data "aws_availability_zones" "available" {
   state = "available"
+}
+
+# Random resource to force instance recreation when user_data changes
+resource "random_id" "user_data_hash" {
+  keepers = {
+    user_data = filesha256("${path.module}/user_data.sh")
+  }
+  byte_length = 8
 }
 
 # Lightsail instance
@@ -36,15 +48,7 @@ resource "aws_lightsail_instance" "app_server" {
     Project     = "GitHub-Actions-Lightsail-Demo"
     ManagedBy   = "Terraform"
     # Force recreation when user_data changes
-    UserDataHash = filesha256("${path.module}/user_data.sh")
-  }
-
-  # Force replacement when user_data script changes
-  lifecycle {
-    replace_triggered_by = [
-      # This will force recreation when the user_data file content changes
-      filesha256("${path.module}/user_data.sh")
-    ]
+    UserDataHash = random_id.user_data_hash.hex
   }
 }
 
