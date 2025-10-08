@@ -137,12 +137,19 @@ jobs:
             break
           elif [ $i -eq 20 ]; then
             echo "Warning: User data script may not have completed"
-            ssh -i ~/.ssh/lightsail_key -o StrictHostKeyChecking=no ubuntu@${{ steps.get-ip.outputs.instance_ip }} "tail -20 /var/log/user-data.log" || echo "Could not read user-data log"
+            echo "=== User Data Log ==="
+            ssh -i ~/.ssh/lightsail_key -o StrictHostKeyChecking=no ubuntu@${{ steps.get-ip.outputs.instance_ip }} "sudo cat /var/log/user-data.log" || echo "Could not read user-data log"
+            echo "=== Cloud Init Log ==="
+            ssh -i ~/.ssh/lightsail_key -o StrictHostKeyChecking=no ubuntu@${{ steps.get-ip.outputs.instance_ip }} "sudo cat /var/log/cloud-init-output.log" || echo "Could not read cloud-init log"
           else
             echo "Waiting for user data script... ($i/20)"
             sleep 15
           fi
         done
+        
+        # Always check the logs for debugging
+        echo "=== Checking Node.js installation status ==="
+        ssh -i ~/.ssh/lightsail_key -o StrictHostKeyChecking=no ubuntu@${{ steps.get-ip.outputs.instance_ip }} "which node || echo 'Node.js not found'; which npm || echo 'npm not found'; ls -la /usr/bin/node* || echo 'No node in /usr/bin'; ls -la /usr/bin/npm* || echo 'No npm in /usr/bin'"
 
   deploy-application:
     needs: [test, deploy-infrastructure]
