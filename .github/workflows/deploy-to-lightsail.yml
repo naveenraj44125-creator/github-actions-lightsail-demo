@@ -273,8 +273,13 @@ jobs:
           echo "Using Node.js at: $NODE_PATH"
           echo "Using npm at: $NPM_PATH"
           
-          # Install dependencies with proper PATH
-          sudo -u www-data env PATH="/usr/bin:/usr/local/bin:/bin:/sbin:/snap/bin" "$NPM_PATH" ci --production
+          # Fix npm cache permissions and install dependencies
+          sudo mkdir -p /var/www/.npm
+          sudo chown -R www-data:www-data /var/www/.npm
+          sudo chmod -R 755 /var/www/.npm
+          
+          # Install dependencies with proper PATH and cache directory
+          sudo -u www-data env PATH="/usr/bin:/usr/local/bin:/bin:/sbin:/snap/bin" HOME="/var/www" "$NPM_PATH" ci --production --cache /var/www/.npm
           
           # Set environment variables for deployment info
           sudo tee /var/www/lightsail-demo-app/.env > /dev/null << ENVEOF
