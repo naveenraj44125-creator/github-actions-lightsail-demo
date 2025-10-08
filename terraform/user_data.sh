@@ -12,8 +12,7 @@ APP_DIR="/var/www/$APP_NAME"
 LOG_FILE="/var/log/user-data.log"
 
 # Redirect output to log file
-exec > >(tee -a $LOG_FILE)
-exec 2>&1
+exec > >(tee -a "$LOG_FILE") 2>&1
 
 echo "Starting user data script at $(date)"
 

@@ -24,7 +24,7 @@ data "aws_availability_zones" "available" {
 # Random resource to force instance recreation when user_data changes
 resource "random_id" "user_data_hash" {
   keepers = {
-    user_data = filesha256("${path.module}/user_data.sh")
+    user_data = filesha256("${path.module}/user_data_simple.sh")
   }
   byte_length = 8
 }
@@ -37,7 +37,7 @@ resource "aws_lightsail_instance" "app_server" {
   bundle_id         = var.bundle_id
   key_pair_name     = aws_lightsail_key_pair.app_key.name
 
-  user_data = templatefile("${path.module}/user_data.sh", {
+  user_data = templatefile("${path.module}/user_data_simple.sh", {
     app_name = var.app_name
     app_port = var.app_port
   })
