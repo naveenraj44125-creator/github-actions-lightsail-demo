@@ -2,6 +2,7 @@
 
 # User data script to set up the Lightsail instance for Node.js application deployment
 # This script runs when the instance first boots up
+# Updated: Force instance recreation with enhanced Node.js installation
 
 set -e
 
