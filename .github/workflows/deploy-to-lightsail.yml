@@ -44,7 +44,6 @@ jobs:
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     outputs:
       instance_ip: ${{ steps.get-ip.outputs.instance_ip }}
-      ssh_private_key: ${{ steps.get-ssh-key.outputs.ssh_private_key }}
     
     steps:
     - name: Checkout code
@@ -55,6 +54,7 @@ jobs:
       with:
         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
         aws-region: ${{ env.AWS_REGION }}
 
     - name: Setup Terraform
@@ -99,57 +99,39 @@ jobs:
         echo "instance_ip=$INSTANCE_IP" >> $GITHUB_OUTPUT
         echo "Instance IP: $INSTANCE_IP"
 
-    - name: Get SSH private key
-      id: get-ssh-key
-      working-directory: ./terraform
-      run: |
-        SSH_KEY=$(terraform output -raw ssh_private_key)
-        echo "ssh_private_key<<EOF" >> $GITHUB_OUTPUT
-        echo "$SSH_KEY" >> $GITHUB_OUTPUT
-        echo "EOF" >> $GITHUB_OUTPUT
-
     - name: Wait for instance to be ready
       run: |
         echo "Waiting for instance to be ready..."
         sleep 120
         
-        # Setup SSH key for this step
-        mkdir -p ~/.ssh
-        echo "${{ steps.get-ssh-key.outputs.ssh_private_key }}" > ~/.ssh/lightsail_key
-        chmod 600 ~/.ssh/lightsail_key
-        ssh-keyscan -H ${{ steps.get-ip.outputs.instance_ip }} >> ~/.ssh/known_hosts
-        
-        # Wait for SSH to be available
+        # Wait for instance to be running and accessible
         for i in {1..30}; do
-          if nc -z ${{ steps.get-ip.outputs.instance_ip }} 22; then
-            echo "SSH is ready!"
+          INSTANCE_STATE=$(aws lightsail get-instance --instance-name ${{ env.LIGHTSAIL_INSTANCE_NAME }} --query 'instance.state.name' --output text)
+          if [ "$INSTANCE_STATE" = "running" ]; then
+            echo "Instance is running!"
             break
           fi
-          echo "Waiting for SSH... ($i/30)"
+          echo "Waiting for instance to be running... ($i/30) Current state: $INSTANCE_STATE"
           sleep 10
         done
         
-        # Wait for user_data script to complete
+        # Wait for user_data script to complete using run command
         echo "Waiting for user_data script to complete..."
         for i in {1..20}; do
-          if ssh -i ~/.ssh/lightsail_key -o StrictHostKeyChecking=no ubuntu@${{ steps.get-ip.outputs.instance_ip }} "test -f /var/log/user-data-complete.marker"; then
-            echo "User data script completed!"
-            break
-          elif [ $i -eq 20 ]; then
-            echo "Warning: User data script may not have completed"
-            echo "=== User Data Log ==="
-            ssh -i ~/.ssh/lightsail_key -o StrictHostKeyChecking=no ubuntu@${{ steps.get-ip.outputs.instance_ip }} "sudo cat /var/log/user-data.log" || echo "Could not read user-data log"
-            echo "=== Cloud Init Log ==="
-            ssh -i ~/.ssh/lightsail_key -o StrictHostKeyChecking=no ubuntu@${{ steps.get-ip.outputs.instance_ip }} "sudo cat /var/log/cloud-init-output.log" || echo "Could not read cloud-init log"
-          else
-            echo "Waiting for user data script... ($i/20)"
-            sleep 15
+          COMMAND_ID=$(aws lightsail send-instance-access-details --instance-name ${{ env.LIGHTSAIL_INSTANCE_NAME }} --protocol ssh --query 'accessDetails.instanceName' --output text 2>/dev/null || echo "")
+          if [ -n "$COMMAND_ID" ]; then
+            # Test if we can run a simple command
+            RESULT=$(aws lightsail get-instance-access-details --instance-name ${{ env.LIGHTSAIL_INSTANCE_NAME }} --query 'accessDetails.ipAddress' --output text 2>/dev/null || echo "")
+            if [ -n "$RESULT" ]; then
+              echo "Instance access is ready!"
+              break
+            fi
           fi
+          echo "Waiting for instance access... ($i/20)"
+          sleep 15
         done
         
-        # Always check the logs for debugging
-        echo "=== Checking Node.js installation status ==="
-        ssh -i ~/.ssh/lightsail_key -o StrictHostKeyChecking=no ubuntu@${{ steps.get-ip.outputs.instance_ip }} "which node || echo 'Node.js not found'; which npm || echo 'npm not found'; ls -la /usr/bin/node* || echo 'No node in /usr/bin'; ls -la /usr/bin/npm* || echo 'No npm in /usr/bin'"
+        echo "Instance is ready for deployment"
 
   deploy-application:
     needs: [test, deploy-infrastructure]
@@ -165,14 +147,13 @@ jobs:
       with:
         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
         aws-region: ${{ env.AWS_REGION }}
 
-    - name: Setup SSH key
+    - name: Setup Python environment
       run: |
-        mkdir -p ~/.ssh
-        echo "${{ needs.deploy-infrastructure.outputs.ssh_private_key }}" > ~/.ssh/lightsail_key
-        chmod 600 ~/.ssh/lightsail_key
-        ssh-keyscan -H ${{ needs.deploy-infrastructure.outputs.instance_ip }} >> ~/.ssh/known_hosts
+        python3 -m pip install --upgrade pip
+        python3 -m pip install boto3
 
     - name: Deploy application to Lightsail
       env:
@@ -186,154 +167,23 @@ jobs:
         # Create deployment package
         tar -czf app.tar.gz app/
         
-        # Copy application to instance
-        scp -i ~/.ssh/lightsail_key -o StrictHostKeyChecking=no app.tar.gz ubuntu@$INSTANCE_IP:/tmp/
+        # Prepare environment variables for deployment
+        ENV_VARS=$(cat << 'ENVJSON'
+        {
+          "NODE_ENV": "production",
+          "PORT": "3000",
+          "DEPLOY_TIME": "$(date -u +\"%Y-%m-%dT%H:%M:%SZ\")",
+          "GITHUB_SHA": "${{ github.sha }}",
+          "GITHUB_REF_NAME": "${{ github.ref_name }}",
+          "GITHUB_WORKFLOW": "${{ github.workflow }}",
+          "GITHUB_RUN_ID": "${{ github.run_id }}",
+          "GITHUB_ACTOR": "${{ github.actor }}"
+        }
+        ENVJSON
+        )
         
-        # Deploy on the instance
-        ssh -i ~/.ssh/lightsail_key -o StrictHostKeyChecking=no ubuntu@$INSTANCE_IP << 'EOF'
-          set -e
-          
-          # Extract application
-          cd /tmp
-          tar -xzf app.tar.gz
-          
-          # Stop the application service
-          sudo systemctl stop lightsail-demo-app || true
-          
-          # Ensure directory structure exists
-          echo "Creating /var/www directory..."
-          sudo mkdir -p /var/www
-          sudo chown root:root /var/www
-          sudo chmod 755 /var/www
-          ls -la /var/
-          
-          # Verify the app directory exists in /tmp
-          echo "Checking extracted files..."
-          ls -la /tmp/
-          
-          # Backup current version if it exists
-          if [ -d "/var/www/lightsail-demo-app" ]; then
-            echo "Backing up existing application..."
-            sudo cp -r /var/www/lightsail-demo-app /var/www/lightsail-demo-app.backup.$(date +%Y%m%d_%H%M%S)
-          fi
-          
-          # Deploy new version
-          echo "Deploying new version..."
-          sudo rm -rf /var/www/lightsail-demo-app
-          sudo mv /tmp/app /var/www/lightsail-demo-app
-          sudo chown -R www-data:www-data /var/www/lightsail-demo-app
-          
-          # Install dependencies
-          cd /var/www/lightsail-demo-app
-          
-          # Ensure npm is available and use full path
-          echo "Checking npm installation..."
-          echo "PATH: $PATH"
-          echo "Checking if Node.js is installed..."
-          which node || echo "Node.js not found"
-          node --version || echo "Node.js version check failed"
-          echo "Checking if npm is installed..."
-          which npm || echo "npm not found in PATH"
-          npm --version || echo "npm version check failed"
-          echo "Checking /usr/bin for node and npm..."
-          ls -la /usr/bin/node* || echo "No node binaries in /usr/bin"
-          ls -la /usr/bin/npm* || echo "No npm binaries in /usr/bin"
-          echo "Checking if npm is available with full path..."
-          /usr/bin/npm --version || echo "/usr/bin/npm not available"
-          
-          # Find Node.js and npm paths and install dependencies
-          echo "Finding Node.js and npm paths..."
-          NODE_PATH=$(which node || echo "")
-          NPM_PATH=$(which npm || echo "")
-          
-          if [ -z "$NODE_PATH" ]; then
-            # Check common locations
-            if [ -f "/usr/bin/node" ]; then
-              NODE_PATH="/usr/bin/node"
-            elif [ -f "/snap/bin/node" ]; then
-              NODE_PATH="/snap/bin/node"
-            else
-              echo "ERROR: Node.js not found in any expected location"
-              exit 1
-            fi
-          fi
-          
-          if [ -z "$NPM_PATH" ]; then
-            # Check common locations
-            if [ -f "/usr/bin/npm" ]; then
-              NPM_PATH="/usr/bin/npm"
-            elif [ -f "/snap/bin/npm" ]; then
-              NPM_PATH="/snap/bin/npm"
-            else
-              echo "ERROR: npm not found in any expected location"
-              exit 1
-            fi
-          fi
-          
-          echo "Using Node.js at: $NODE_PATH"
-          echo "Using npm at: $NPM_PATH"
-          
-          # Fix npm cache permissions and install dependencies
-          sudo mkdir -p /var/www/.npm
-          sudo chown -R www-data:www-data /var/www/.npm
-          sudo chmod -R 755 /var/www/.npm
-          
-          # Install dependencies with proper PATH and cache directory
-          sudo -u www-data env PATH="/usr/bin:/usr/local/bin:/bin:/sbin:/snap/bin" HOME="/var/www" "$NPM_PATH" ci --production --cache /var/www/.npm
-          
-          # Set environment variables for deployment info
-          sudo tee /var/www/lightsail-demo-app/.env > /dev/null << ENVEOF
-          NODE_ENV=production
-          PORT=3000
-          DEPLOY_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-          GITHUB_SHA=$GITHUB_SHA
-          GITHUB_REF_NAME=$GITHUB_REF_NAME
-          GITHUB_WORKFLOW=$GITHUB_WORKFLOW
-          GITHUB_RUN_ID=$GITHUB_RUN_ID
-          GITHUB_ACTOR=$GITHUB_ACTOR
-        ENVEOF
-          
-          # Update systemd service to use .env file and correct Node.js path
-          sudo tee /etc/systemd/system/lightsail-demo-app.service > /dev/null << SERVICEEOF
-        [Unit]
-        Description=Lightsail Demo App Node.js Application
-        After=network.target
-
-        [Service]
-        Type=simple
-        User=www-data
-        Group=www-data
-        WorkingDirectory=/var/www/lightsail-demo-app
-        ExecStart=$NODE_PATH server.js
-        Restart=always
-        RestartSec=10
-        EnvironmentFile=/var/www/lightsail-demo-app/.env
-
-        # Logging
-        StandardOutput=syslog
-        StandardError=syslog
-        SyslogIdentifier=lightsail-demo-app
-
-        [Install]
-        WantedBy=multi-user.target
-        SERVICEEOF
-          
-          # Reload systemd and start the application
-          sudo systemctl daemon-reload
-          sudo systemctl enable lightsail-demo-app
-          sudo systemctl start lightsail-demo-app
-          
-          # Restart nginx to ensure proper proxy configuration
-          sudo systemctl restart nginx
-          
-          # Wait a moment for the service to start
-          sleep 5
-          
-          # Check service status
-          sudo systemctl status lightsail-demo-app --no-pager
-          
-          echo "Application deployed successfully!"
-        EOF
+        # Deploy using Python script with run commands
+        python3 deploy-with-run-command.py "${{ env.LIGHTSAIL_INSTANCE_NAME }}" "app.tar.gz" "$ENV_VARS"
 
     - name: Health check
       env:

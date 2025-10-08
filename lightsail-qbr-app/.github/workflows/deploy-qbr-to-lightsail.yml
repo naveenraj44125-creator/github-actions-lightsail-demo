@@ -1,0 +1,172 @@
+name: Deploy QBR App to Lightsail
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+        aws-region: us-east-1
+        
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install boto3
+        
+    - name: Check if Lightsail instance exists
+      id: check-instance
+      run: |
+        python3 << 'EOF'
+        import boto3
+        import sys
+        
+        try:
+            client = boto3.client('lightsail', region_name='us-east-1')
+            response = client.get_instance(instanceName='lightsail-qbr')
+            print(f"Instance exists: {response['instance']['name']}")
+            print(f"Instance state: {response['instance']['state']['name']}")
+            print("::set-output name=exists::true")
+        except client.exceptions.NotFoundException:
+            print("Instance 'lightsail-qbr' not found")
+            print("::set-output name=exists::false")
+        except Exception as e:
+            print(f"Error checking instance: {e}")
+            sys.exit(1)
+        EOF
+        
+    - name: Create Lightsail instance if not exists
+      if: steps.check-instance.outputs.exists == 'false'
+      run: |
+        python3 << 'EOF'
+        import boto3
+        import time
+        
+        client = boto3.client('lightsail', region_name='us-east-1')
+        
+        # Create the instance
+        response = client.create_instances(
+            instanceNames=['lightsail-qbr'],
+            availabilityZone='us-east-1a',
+            blueprintId='lamp_8_bitnami',
+            bundleId='nano_3_0',
+            userData='''#!/bin/bash
+        # Update system
+        sudo apt-get update -y
+        
+        # Install required packages
+        sudo apt-get install -y mysql-server php php-mysql php-mbstring php-xml php-curl
+        
+        # Configure MySQL
+        sudo mysql -e "CREATE DATABASE IF NOT EXISTS lightsail_qbr CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+        sudo mysql -e "CREATE USER IF NOT EXISTS 'qbr_user'@'localhost' IDENTIFIED BY 'qbr_password_2025';"
+        sudo mysql -e "GRANT ALL PRIVILEGES ON lightsail_qbr.* TO 'qbr_user'@'localhost';"
+        sudo mysql -e "FLUSH PRIVILEGES;"
+        
+        # Set proper permissions for web directory
+        sudo chown -R bitnami:daemon /opt/bitnami/apache/htdocs/
+        sudo chmod -R 755 /opt/bitnami/apache/htdocs/
+        
+        # Restart services
+        sudo /opt/bitnami/ctlscript.sh restart apache
+        sudo /opt/bitnami/ctlscript.sh restart mysql
+        '''
+        )
+        
+        print(f"Creating instance: {response['operations'][0]['operationDetails']}")
+        
+        # Wait for instance to be running
+        print("Waiting for instance to be running...")
+        waiter = client.get_waiter('instance_running')
+        waiter.wait(instanceName='lightsail-qbr')
+        
+        print("Instance is now running!")
+        EOF
+        
+    - name: Wait for instance to be ready
+      run: |
+        python3 << 'EOF'
+        import boto3
+        import time
+        
+        client = boto3.client('lightsail', region_name='us-east-1')
+        
+        # Wait for instance to be running
+        max_attempts = 30
+        for attempt in range(max_attempts):
+            try:
+                response = client.get_instance(instanceName='lightsail-qbr')
+                state = response['instance']['state']['name']
+                print(f"Attempt {attempt + 1}: Instance state is {state}")
+                
+                if state == 'running':
+                    print("Instance is running!")
+                    break
+                    
+                time.sleep(30)
+            except Exception as e:
+                print(f"Error checking instance state: {e}")
+                time.sleep(30)
+        else:
+            print("Instance did not become ready in time")
+            exit(1)
+            
+        # Additional wait for services to be ready
+        print("Waiting additional time for services to initialize...")
+        time.sleep(60)
+        EOF
+        
+    - name: Deploy QBR application using Python script
+      run: |
+        python3 deploy-qbr-to-lightsail.py
+        
+    - name: Final deployment status
+      run: |
+        python3 << 'EOF'
+        import boto3
+        
+        client = boto3.client('lightsail', region_name='us-east-1')
+        
+        try:
+            response = client.get_instance(instanceName='lightsail-qbr')
+            instance = response['instance']
+            
+            print("=== Deployment Summary ===")
+            print(f"Instance Name: {instance['name']}")
+            print(f"Instance State: {instance['state']['name']}")
+            print(f"Public IP: {instance.get('publicIpAddress', 'Not assigned')}")
+            print(f"Private IP: {instance.get('privateIpAddress', 'Not assigned')}")
+            print(f"Blueprint: {instance['blueprintName']}")
+            print(f"Bundle: {instance['bundleName']}")
+            
+            if instance.get('publicIpAddress'):
+                print(f"\n🚀 QBR Application URL: http://{instance['publicIpAddress']}/qbr-app/")
+                print(f"📊 Admin Panel: http://{instance['publicIpAddress']}/qbr-app/admin/")
+                print("\n📝 Default Login Credentials:")
+                print("   Admin: admin / admin123")
+                print("   Employee: employee / employee123")
+            
+            print("\n✅ Deployment completed successfully!")
+            
+        except Exception as e:
+            print(f"Error getting final instance details: {e}")
+        EOF

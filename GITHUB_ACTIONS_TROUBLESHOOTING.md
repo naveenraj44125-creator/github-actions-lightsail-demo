@@ -1,27 +1,28 @@
 # GitHub Actions Troubleshooting Guide
 
-## 🚨 Issues Fixed
+## 🚨 Issues Fixed (Latest Update)
 
-Your GitHub Actions workflow had several critical issues that have been resolved:
+Your GitHub Actions workflow has been updated with the following critical fixes:
 
-### 1. **Test Failures** ✅ FIXED
-- **Issue**: Test was expecting "Welcome to Lightsail Demo App!" but server returns "Welcome to Lightsail Demo App! 🚀 Deployed via GitHub Actions!"
-- **Fix**: Updated `app/server.test.js` to match the actual server response
+### 1. **Missing AWS Session Token** ✅ FIXED
+- **Issue**: Workflow was missing `aws-session-token` parameter for AWS credentials
+- **Fix**: Added `aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}` to all AWS credential configurations
 
-### 2. **Workflow Structure** ✅ FIXED
-- **Issue**: Complex, monolithic workflow that was hard to debug
-- **Fix**: Split into 3 separate jobs:
-  - `test`: Runs tests and builds
-  - `deploy-infrastructure`: Deploys Terraform infrastructure
-  - `deploy-application`: Deploys the Node.js application
+### 2. **Unreliable SSH-based Deployment** ✅ FIXED
+- **Issue**: SSH key management was complex and error-prone
+- **Fix**: Replaced SSH deployment with Python script using AWS Lightsail run commands
+- **Added**: `deploy-with-run-command.py` script for reliable deployment
 
-### 3. **Missing Dependencies** ✅ FIXED
-- **Issue**: Workflow assumed infrastructure already existed
-- **Fix**: Added proper Terraform deployment step with state management
+### 3. **Workflow Structure Improvements** ✅ FIXED
+- **Issue**: Complex SSH setup and deployment logic
+- **Fix**: Simplified deployment using AWS native access methods
+- **Removed**: SSH key output and complex SSH setup steps
+- **Added**: Python environment setup and boto3 installation
 
-### 4. **Improved Error Handling** ✅ FIXED
-- **Issue**: Poor error handling and debugging capabilities
-- **Fix**: Added comprehensive health checks, retries, and status reporting
+### 4. **Deployment Method Modernization** ✅ FIXED
+- **Issue**: Manual SSH commands were brittle and hard to debug
+- **Fix**: Using AWS Lightsail `get-instance-access-details` API for secure access
+- **Benefit**: More reliable, better error handling, cleaner logs
 
 ## 🔧 Required Setup
 
@@ -36,8 +37,9 @@ Run the setup script to configure required secrets:
 **Required Secrets:**
 - `AWS_ACCESS_KEY_ID` - Your AWS Access Key ID
 - `AWS_SECRET_ACCESS_KEY` - Your AWS Secret Access Key  
-- `AWS_SESSION_TOKEN` - AWS Session Token (if using temporary credentials)
-- `LIGHTSAIL_SSH_KEY` - SSH private key (set after first deployment)
+- `AWS_SESSION_TOKEN` - AWS Session Token (REQUIRED for temporary credentials)
+
+**Note**: The `LIGHTSAIL_SSH_KEY` secret is no longer needed as the workflow now uses AWS run commands instead of SSH keys.
 
 ### Step 2: AWS Credentials Setup
 
@@ -66,10 +68,10 @@ aws configure export-credentials --profile your-profile --format env
    - Click on "Actions" tab
    - Watch the workflow progress
 
-3. **Update SSH Key (after first deployment):**
-   - Go to AWS Lightsail Console → Account → SSH Keys
-   - Download the private key for `my-app-instance-key`
-   - Update the `LIGHTSAIL_SSH_KEY` secret with the actual key content
+3. **Verify Deployment:**
+   - The workflow now uses AWS run commands instead of SSH keys
+   - No manual SSH key setup is required
+   - Monitor the deployment through GitHub Actions logs
 
 ## 🔍 Common Issues & Solutions
 
@@ -87,11 +89,12 @@ cd terraform
 terraform force-unlock <LOCK_ID>
 ```
 
-### Issue: "SSH connection failed"
+### Issue: "AWS run command failed"
 **Solution:**
-- Ensure LIGHTSAIL_SSH_KEY secret contains the correct private key
-- Verify the key format (should start with `-----BEGIN OPENSSH PRIVATE KEY-----`)
+- Verify AWS credentials have proper Lightsail permissions
 - Check that the instance is running and accessible
+- Ensure the instance has the latest AWS SSM agent (handled by user_data script)
+- Review deployment logs in GitHub Actions for specific error messages
 
 ### Issue: "Health check failed"
 **Solution:**
@@ -126,10 +129,10 @@ npm test
 
 ### Job 3: Deploy Application (`deploy-application`)
 - Depends on both test and infrastructure jobs
-- Sets up SSH key for deployment
+- Sets up Python environment and boto3
 - Creates deployment package
-- Copies application to Lightsail instance
-- Installs dependencies on server
+- Uses AWS run commands to deploy application
+- Installs dependencies on server via run commands
 - Configures systemd service
 - Performs health checks
 - Reports deployment status
@@ -151,8 +154,11 @@ npm test
 
 ### Server Logs
 ```bash
-# SSH into your instance
+# SSH into your instance (get SSH details from Lightsail console)
 ssh -i ~/.ssh/lightsail_key ubuntu@<INSTANCE_IP>
+
+# Or use AWS CLI to run commands directly
+aws lightsail get-instance-access-details --instance-name my-app-instance
 
 # Check application status
 sudo systemctl status lightsail-demo-app
@@ -218,5 +224,5 @@ Your deployment is successful when you see:
 
 ---
 
-**Last Updated**: October 6, 2025
-**Workflow Version**: 2.0 (Improved & Fixed)
+**Last Updated**: October 8, 2025
+**Workflow Version**: 3.0 (AWS Run Commands & Session Token Fix)
