@@ -38,8 +38,21 @@ apt-get install -y \
 
 # Install Node.js 18.x
 echo "Installing Node.js..."
-curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
-apt-get install -y nodejs
+# Try NodeSource first
+if curl -fsSL https://deb.nodesource.com/setup_18.x | bash -; then
+    echo "NodeSource repository added successfully"
+    if apt-get install -y nodejs; then
+        echo "Node.js installed successfully via NodeSource"
+    else
+        echo "Failed to install Node.js via NodeSource, trying alternative method"
+        # Fallback to snap installation
+        snap install node --classic
+    fi
+else
+    echo "Failed to add NodeSource repository, trying alternative method"
+    # Fallback to snap installation
+    snap install node --classic
+fi
 
 # Verify Node.js installation
 echo "Node.js version: $(node --version)"

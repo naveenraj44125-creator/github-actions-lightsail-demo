@@ -241,8 +241,40 @@ jobs:
           echo "Checking if npm is available with full path..."
           /usr/bin/npm --version || echo "/usr/bin/npm not available"
           
-          # Use full path to npm with proper PATH preservation
-          sudo -u www-data env PATH="/usr/bin:/usr/local/bin:/bin:/sbin" /usr/bin/npm ci --production
+          # Find Node.js and npm paths and install dependencies
+          echo "Finding Node.js and npm paths..."
+          NODE_PATH=$(which node || echo "")
+          NPM_PATH=$(which npm || echo "")
+          
+          if [ -z "$NODE_PATH" ]; then
+            # Check common locations
+            if [ -f "/usr/bin/node" ]; then
+              NODE_PATH="/usr/bin/node"
+            elif [ -f "/snap/bin/node" ]; then
+              NODE_PATH="/snap/bin/node"
+            else
+              echo "ERROR: Node.js not found in any expected location"
+              exit 1
+            fi
+          fi
+          
+          if [ -z "$NPM_PATH" ]; then
+            # Check common locations
+            if [ -f "/usr/bin/npm" ]; then
+              NPM_PATH="/usr/bin/npm"
+            elif [ -f "/snap/bin/npm" ]; then
+              NPM_PATH="/snap/bin/npm"
+            else
+              echo "ERROR: npm not found in any expected location"
+              exit 1
+            fi
+          fi
+          
+          echo "Using Node.js at: $NODE_PATH"
+          echo "Using npm at: $NPM_PATH"
+          
+          # Install dependencies with proper PATH
+          sudo -u www-data env PATH="/usr/bin:/usr/local/bin:/bin:/sbin:/snap/bin" "$NPM_PATH" ci --production
           
           # Set environment variables for deployment info
           sudo tee /var/www/lightsail-demo-app/.env > /dev/null << ENVEOF
@@ -256,7 +288,7 @@ jobs:
           GITHUB_ACTOR=$GITHUB_ACTOR
         ENVEOF
           
-          # Update systemd service to use .env file
+          # Update systemd service to use .env file and correct Node.js path
           sudo tee /etc/systemd/system/lightsail-demo-app.service > /dev/null << SERVICEEOF
         [Unit]
         Description=Lightsail Demo App Node.js Application
@@ -267,7 +299,7 @@ jobs:
         User=www-data
         Group=www-data
         WorkingDirectory=/var/www/lightsail-demo-app
-        ExecStart=/usr/bin/node server.js
+        ExecStart=$NODE_PATH server.js
         Restart=always
         RestartSec=10
         EnvironmentFile=/var/www/lightsail-demo-app/.env
