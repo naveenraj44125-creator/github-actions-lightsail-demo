@@ -234,8 +234,8 @@ jobs:
           echo "Checking if npm is available with full path..."
           /usr/bin/npm --version || echo "/usr/bin/npm not available"
           
-          # Use full path to npm or ensure PATH is set correctly
-          sudo -u www-data env PATH=$PATH:/usr/bin:/usr/local/bin npm ci --production
+          # Use full path to npm with proper PATH preservation
+          sudo -u www-data env PATH="/usr/bin:/usr/local/bin:/bin:/sbin" /usr/bin/npm ci --production
           
           # Set environment variables for deployment info
           sudo tee /var/www/lightsail-demo-app/.env > /dev/null << ENVEOF
