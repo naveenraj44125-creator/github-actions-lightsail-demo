@@ -36,27 +36,84 @@ apt-get install -y \
     nginx \
     supervisor
 
-# Install Node.js 18.x
+# Install Node.js 18.x with multiple fallback methods
 echo "Installing Node.js..."
-# Try NodeSource first
+
+NODE_INSTALLED=false
+
+# Method 1: Try NodeSource repository
+echo "Attempting NodeSource installation..."
 if curl -fsSL https://deb.nodesource.com/setup_18.x | bash -; then
     echo "NodeSource repository added successfully"
-    if apt-get install -y nodejs; then
+    if apt-get update && apt-get install -y nodejs; then
         echo "Node.js installed successfully via NodeSource"
+        NODE_INSTALLED=true
     else
-        echo "Failed to install Node.js via NodeSource, trying alternative method"
-        # Fallback to snap installation
-        snap install node --classic
+        echo "Failed to install Node.js via NodeSource"
     fi
 else
-    echo "Failed to add NodeSource repository, trying alternative method"
-    # Fallback to snap installation
-    snap install node --classic
+    echo "Failed to add NodeSource repository"
+fi
+
+# Method 2: Try snap installation if NodeSource failed
+if [ "$NODE_INSTALLED" = false ]; then
+    echo "Attempting snap installation..."
+    if snap install node --classic; then
+        echo "Node.js installed successfully via snap"
+        # Create symlinks for snap installation
+        ln -sf /snap/bin/node /usr/local/bin/node
+        ln -sf /snap/bin/npm /usr/local/bin/npm
+        NODE_INSTALLED=true
+    else
+        echo "Failed to install Node.js via snap"
+    fi
+fi
+
+# Method 3: Try Ubuntu default repository as last resort
+if [ "$NODE_INSTALLED" = false ]; then
+    echo "Attempting Ubuntu repository installation..."
+    if apt-get install -y nodejs npm; then
+        echo "Node.js installed successfully via Ubuntu repository"
+        NODE_INSTALLED=true
+    else
+        echo "Failed to install Node.js via Ubuntu repository"
+    fi
+fi
+
+# Method 4: Try manual binary installation if all else fails
+if [ "$NODE_INSTALLED" = false ]; then
+    echo "Attempting manual binary installation..."
+    NODE_VERSION="18.20.4"
+    cd /tmp
+    if wget "https://nodejs.org/dist/v$NODE_VERSION/node-v$NODE_VERSION-linux-x64.tar.xz"; then
+        tar -xf "node-v$NODE_VERSION-linux-x64.tar.xz"
+        cp -r "node-v$NODE_VERSION-linux-x64"/* /usr/local/
+        rm -rf "node-v$NODE_VERSION-linux-x64"*
+        echo "Node.js installed successfully via manual binary"
+        NODE_INSTALLED=true
+    else
+        echo "Failed to download Node.js binary"
+    fi
 fi
 
 # Verify Node.js installation
-echo "Node.js version: $(node --version)"
-echo "npm version: $(npm --version)"
+if [ "$NODE_INSTALLED" = true ]; then
+    # Update PATH to include all possible Node.js locations
+    export PATH="/usr/local/bin:/snap/bin:/usr/bin:$PATH"
+    
+    # Test Node.js installation
+    if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
+        echo "Node.js version: $(node --version)"
+        echo "npm version: $(npm --version)"
+        echo "Node.js installation verified successfully!"
+    else
+        echo "ERROR: Node.js installation verification failed"
+        exit 1
+    fi
+else
+    echo "ERROR: All Node.js installation methods failed"
+    exit 1
+fi
 
 # Install PM2 for process management
 echo "Installing PM2..."
@@ -69,6 +126,21 @@ chown -R www-data:www-data $APP_DIR
 
 # Create systemd service for the application
 echo "Creating systemd service..."
+
+# Determine Node.js path
+NODE_PATH=""
+if command -v /usr/local/bin/node >/dev/null 2>&1; then
+    NODE_PATH="/usr/local/bin/node"
+elif command -v /snap/bin/node >/dev/null 2>&1; then
+    NODE_PATH="/snap/bin/node"
+elif command -v /usr/bin/node >/dev/null 2>&1; then
+    NODE_PATH="/usr/bin/node"
+else
+    NODE_PATH="$(which node)"
+fi
+
+echo "Using Node.js path for systemd service: $NODE_PATH"
+
 cat > /etc/systemd/system/$APP_NAME.service << EOF
 [Unit]
 Description=$APP_NAME Node.js Application
@@ -79,11 +151,12 @@ Type=simple
 User=www-data
 Group=www-data
 WorkingDirectory=$APP_DIR
-ExecStart=/usr/bin/node server.js
+ExecStart=$NODE_PATH server.js
 Restart=always
 RestartSec=10
 Environment=NODE_ENV=production
 Environment=PORT=3000
+Environment=PATH=/usr/local/bin:/snap/bin:/usr/bin:/bin
 
 # Logging
 StandardOutput=syslog
